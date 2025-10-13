@@ -1,11 +1,3 @@
-python sttm_codegen_from_template_v2.py --excel /Users/santoshkotagiri/Documents/git-workspace/confluent-flink-ingestion-1/ingestion-framework/resources/STTM_v2_template.xlsx --out-dir /Users/santoshkotagiri/Documents/git-workspace/confluent-flink-ingestion-1/ingestion-framework/resources/
-
-python flinksql_from_sttm_v3.py --excel /Users/santoshkotagiri/Documents/git-workspace/confluent-flink-ingestion-1/ingestion-framework/resources/STTM_v3_template.xlsx --out-file /Users/santoshkotagiri/Documents/git-workspace/confluent-flink-ingestion-1/ingestion-framework/resources/output/flinksql_v3.sql
-
-
-GCS connectors:
-python gcs_config_generator.py template --out templates/gcs_connectors_template.xlsx
-python gcs_config_generator.py generate --excel ../templates/gcs_connectors_template.xlsx --outdir ../templates
 
 
 GCS Config Generator — Simplifying Connector Configuration

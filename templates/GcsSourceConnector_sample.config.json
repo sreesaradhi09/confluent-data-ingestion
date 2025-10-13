@@ -1,0 +1,20 @@
+{
+  "name": "GcsSourceConnector_sample",
+  "cloud.environment": "prod",
+  "kafka.endpoint": "SASL_SSL://abc:9092",
+  "kafka.region": "us-east4",
+  "kafka.service.account.id": "sa-yyyyy",
+  "topics.dir": "file/splitfiles_sample",
+  "tasks.max": "5",
+  "topic-regex.list": "DATA_**",
+  "gcs.credentials.json": "secret://gcs/source/creds",
+  "gcs.bucket.name": "bkt-a-use4-gcs-landing",
+  "input.data.format": "STRING",
+  "output.data.format": "STRING",
+  "value.converter.decimal.format": "NUMERIC",
+  "value.converter.replace.null.with.default": "false",
+  "poll.interval.ms": "60000",
+  "cloud.provider": "gcp",
+  "kafka.auth.mode": "SERVICE_ACCOUNT",
+  "connector.class": "GcsSource"
+}

@@ -1,0 +1,22 @@
+{
+"cloud.environment": "prod",
+"cloud.provider": "gcp",
+"connector.class": "GcsSink",
+"gcs. bucket.name": "bkt-d-use4-gcs-ehs-landing-nhkw",
+"gcs.credentials.config": "****************",
+"input.data. format": "JSON",
+"kafka.auth.mode" : "SERVICE_ACCOUNT" ,
+"kafka.endpoint": "SASL_SSL://abc-a9a35.us-east4.gcp.confluent.cloud:9092" ,
+"kafka.region": "us-east4",
+"kafka.service.account.id": "sa-dsfW23",
+"name" : "GcsSinkConnector_cba_ci_fgac",
+"output.data. format": "JSON",
+"tasks.max" : "1",
+"time.interval" : "HOURLY",
+"timezone" : "US/Eastern",
+"topics": "provider-corpcodetables-sys14, enrol1-cus tmembrepo-dba13",
+"topics.dir": "sink",
+"transforms": "MaskField",
+"transforms.MaskField.fields": "DTL CAPXACTION",
+"transforms.MaskField. type": "org.apache.kafka.connect. transforms.MaskField$value"
+}

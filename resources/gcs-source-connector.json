@@ -1,0 +1,19 @@
+{
+"cloud. environment": "prod",
+"cloud provider": "gcp",
+"connector. class": "GcsSource",
+"gcs. bucket name": "bkt-a-use4-gcs-abc-landing-dfew",
+"gcs credentials.json": "****************",
+"input data format": "STRING",
+"kafka.auth.mode": "SERVICE_ACCOUNT",
+"kafka.endpoint": "SASL_SSL://abc-g7g213.us-east4.gcp.confluent.cloud:9092",
+"kafka.region": "us-east4",
+"kafka. service.account.id": "sa-oijjjrwe8",
+"name": "GcsSourceConnector_cba_ci_hst",
+"output data. format": "STRING",
+"tasks-max": "5",
+"topic-regex. list": "CBA_CI_HST**",
+"topics.dir": "file/splitfiles_cba_ci_hst",
+"value. converter. decimal. format": "NUMERIC",
+"value.converter.replace.null.with.default": "false"
+}
