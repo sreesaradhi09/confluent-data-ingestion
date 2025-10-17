@@ -70,3 +70,56 @@ Regardless of whether you choose a major or minor version, the process involves 
 3.  Once the description is added and the selection is made, the description is "effectively locked in".
 4.  You then proceed forward, and this action moves the document to the next chosen version (major or minor).
 5.  The official versioning information, including the description, is visible within the workflow history and runs "side by side" with Confluence's native versioning.
+
+
+
+This content is designed for two PowerPoint slides to explain the core concepts and mechanics of the official versioning feature in Workflows for Confluence, based entirely on the provided sources.
+
+***
+
+## Slide 1: Understanding Official Versioning
+
+**Title:** Official Versioning: Controlling Major and Minor Changes
+
+### 1. What It Is
+*   The official versioning feature in Workflows for Confluence **goes beyond Confluence's native versioning**.
+*   It gives users the ability to explicitly select **major or minor versions** for a document.
+*   The selection depends on the **changes that have been made** to the document.
+
+### 2. Major Versioning
+*   Used for **big changes**.
+*   Selecting "create major version" moves the document to the next whole number version.
+*   **Example:** Moving from version **1.0 to 2.0**.
+
+### 3. Minor Versioning
+*   Used for **minor changes**.
+*   Selecting "create minor version" results in an incremental increase in the decimal version.
+*   **Example:** Moving from version **1.0 to 1.1**.
+
+### 4. Visibility
+*   This official versioning runs **side by side** with Confluence’s native versioning.
+*   The final official version (e.g., 1.0) and the **official version description** are visible within the workflow history.
+
+***
+
+## Slide 2: Implementation in the Workflow
+
+**Title:** Implementing Official Versioning: Steps and Statuses
+
+### 1. Workflow Setup (Prerequisite)
+The workflow must include these two stages in a **linear fashion**:
+*   **Create Official Version** status.
+*   **Approve Official Version** status (This must **always fall after** the "Create Official Version" status).
+
+### 2. The Versioning Action
+Once the document is ready to be officially versioned (e.g., moving from a "draft" state):
+*   **Move Status:** The user progresses the document to the **Create Official Version** status.
+*   **Add Details:** At this stage, the user must:
+    *   Add a **version description**.
+    *   Select either **create major version** or **create minor version**.
+
+### 3. Finalizing the Version
+*   Once the version description and major/minor selection are made, the description is **effectively locked in**.
+*   The user then selects to **"go forward and proceed"**.
+*   This action moves the document to the next major or minor version and progresses the workflow (e.g., to "published").
+*   The workflow history will show that the official version has been created, along with the included description.
