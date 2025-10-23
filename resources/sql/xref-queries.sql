@@ -1,0 +1,101 @@
+
+--xref logic queries
+
+CREATE VIEW CLH_CL_N_view (CI_ID, CL_N, CL_ENSRC_C, BPD_ID) AS
+SELECT
+    JSON_VALUE(CAST(val AS STRING), '$.CL_ID'),
+    JSON_VALUE(CAST(val AS STRING), '$.CL_N'),
+    JSON_VALUE(CAST(val AS STRING), '$.CL_ENSRC_C'),
+    JSON_VALUE(CAST(val AS STRING), '$.BPD_ID')
+FROM ClientRepo-Kafka-Topic
+WHERE JSON_VALUE(CAST(val AS STRING), '$.INFA_TABLE_NAME') LIKE '%_CLH_0000';
+
+CREATE TABLE XREF_CLH_CL_N (
+    CL_ID INT,
+    CL_N VARCHAR(17),
+    CL_ENSRC_C VARCHAR(3),
+    BPD_ID INT,
+    PRIMARY KEY (CL_ID, CL_N) NOT ENFORCED
+)
+WITH (
+    'value.format' = 'avro-registry',
+    'changelog.mode' = 'upsert'
+);
+
+CREATE VIEW CBA_CI_CTCOV_view (CI_ID, CNTR_ID, CLI_ID) AS
+SELECT
+    JSON_VALUE(CAST(val AS STRING), '$.CI_ID'),
+    JSON_VALUE(CAST(val AS STRING), '$.CNTR_ID'),
+    JSON_VALUE(CAST(val AS STRING), '$.CLI_ID')
+FROM ClientRepo-Kafka-Topic
+WHERE JSON_VALUE(CAST(val AS STRING), '$.INFA_TABLE_NAME') LIKE '%_CBA_CI_CTCOV';
+
+CREATE TABLE XREF_CBA_CI_CTCOV (
+    CI_ID INT,
+    CL_ENSRC_C VARCHAR(3),
+    BPD_ID INT,
+    CLI_ID VARCHAR(17),
+    PRIMARY KEY (CI_ID) NOT ENFORCED
+)
+WITH (
+    'value.format' = 'avro-registry',
+    'changelog.mode' = 'upsert'
+);
+
+
+CREATE VIEW CBA_CI_view (CI_ID) AS
+SELECT
+    JSON_VALUE(CAST(val AS STRING), '$.CI_ID')
+FROM ClientRepo-Kafka-Topic
+WHERE JSON_VALUE(CAST(val AS STRING), '$.INFA_TABLE_NAME') LIKE '%_CBA_CI';
+
+CREATE TABLE XREF_CBA_CI (
+    CI_ID INT,
+    CLI_ID VARCHAR(17),
+    CL_ENSRC_C VARCHAR(3),
+    BPD_ID INT,
+    PRIMARY KEY (CI_ID) NOT ENFORCED
+)
+WITH (
+    'value.format' = 'avro-registry',
+    'changelog.mode' = 'upsert'
+);
+
+
+
+EXECUTE STATEMENT SET
+BEGIN
+
+-- set 'sql.state.ttl' = '5 min';
+-- set 'DMB13A_XREF_CLH_CL_N.exec.state.ttl' = '0 ms';
+INSERT INTO XREF_CLH_CL_N (CL_ID, CL_N, CL_ENSRC_C, BPD_ID)
+SELECT
+    CAST(CL_ID AS INT),
+    CL_N,
+    CL_ENSRC_C,
+    CAST(BPD_ID AS INT)
+FROM DMB13A_CLH_CL_N_view;
+
+-- set 'sql.state.ttl' = '0 ms';
+INSERT INTO XREF_CBA_CI_CTCOV (CI_ID, CL_ENSRC_C, BPD_ID, CLI_ID)
+SELECT
+    CAST(CI_ID AS INT),
+    CLH.CL_ENSRC_C,
+    CAST(CLH.BPD_ID AS INT),
+    CLI_ID
+FROM DMB13A_CBA_CI_CTCOV_view COV
+LEFT JOIN DMB13A_XREF_CLH_CL_N CLH
+    ON TRIM(CLH.CL_N) = TRIM(COV.CNTR_ID);
+
+-- set 'sql.state.ttl' = '0 ms';
+INSERT INTO XREF_CBA_CI (CI_ID, CLI_ID, CL_ENSRC_C, BPD_ID)
+SELECT
+    CAST(CBA.CI_ID AS INT),
+    CLI_ID,
+    CL_ENSRC_C,
+    CAST(CTCOV.BPD_ID AS INT)
+FROM DMB13A_CBA_CI_view CBA
+LEFT JOIN DMB13A_XREF_CBA_CI_CTCOV CTCOV
+    ON CAST(CBA.CI_ID AS INT) = CTCOV.CI_ID;
+
+END;

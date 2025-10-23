@@ -1,0 +1,90 @@
+Demo Script:
+===========
+
+🎙️ Script for Explaining the Latest STTM to Analysts
+Opening (Context & Purpose)
+
+“Alright team, let’s go over the latest STTM version — this is version sixteen, and it’s our standardized blueprint for defining how data flows from Kafka topics into our Flink tables.
+The goal of this document is simple — instead of writing SQL scripts manually, we capture every transformation, join, and rule as structured metadata here.
+The Python generator then reads this sheet and produces all the Flink DDL and DML automatically — from raw JSON to clean Iceberg tables.”
+
+Section 1 – How the STTM is Structured
+“If you open the sheet named STTM_Mapping, you’ll see that each row represents exactly one target column. That means for every column we want to build, we record where it comes from, how it’s transformed, and where it lands.
+The document is divided into three logical stages — 1️⃣ View – where we parse JSON from Kafka into a table format, 2️⃣ XREF – where we build snapshot or cross-reference tables using primary key upserts, and 3️⃣ FGAC – where we apply fine-grained access control logic and enrich or mask the final data.
+You’ll always see the rows ordered in that sequence: Views first, then XREF, then FGAC.”
+
+Section 2 – Key Columns and How to Fill Them
+“Let’s walk through the key columns you’ll be working with.
+	•	PipelineStage – choose one of View, XREF, or FGAC.
+	•	TargetTable – the name of the table being built, like CBA_CI_view or XREF_CBA_CI.
+	•	TargetColumn – the specific output column, like CI_ID, EMAIL_MASKED, or LINE1.
+	•	TargetDataType – the final data type. There’s a dropdown so you can select from allowed types — like STRING, INT, DATE, etc.
+	•	IsTargetPK – mark ‘Y’ for primary key fields. These rows will be highlighted in green.
+	•	TargetPK – you only fill this for key columns; for non-keys, leave it blank.
+	•	SourcePrimaryTable and SourceField – define where the data comes from, whether it’s a Kafka topic, another view, or an XREF table.
+	•	SourceTransformExpr – this is where you describe how the field is derived. Keep it to expressions only — for example: CAST(JSON_VALUE(CAST(val AS STRING), '$.CI_ID') AS INT) No full SQL statements here.
+	•	FilterPredicate – this goes only on the primary key row of a view. It tells Flink which records belong to that logical table, since a Kafka topic may carry multiple tables. For example: INFA_TABLE_NAME LIKE '%_CBA_CI'.
+	•	JoinTable1 / JoinAlias1 / JoinType1 / JoinCondition1 – used when the target table is built from multiple inputs. You simply enter the other table’s name, alias, and join condition — for example: JoinType1 = LEFT and JoinCondition1 = TRIM(clh.CL_N) = TRIM(cov.CNTR_ID). Just the condition — don’t include the keyword ‘LEFT ON’ or ‘INNER ON’.
+	•	Notes – this is optional, but use it to clarify business rules or transformations, like ‘Mask PII’ or ‘Derived from parent snapshot’.”
+
+Section 3 – Configuration, Naming & Conventions
+“Now, a few important conventions that make this document work seamlessly with the Flink generator.
+All Flink tables follow a consistent naming pattern:
+	•	Source views end with _view
+	•	Snapshot tables begin with XREF_
+	•	FGAC outputs end with _REF or _REFINED.
+The generator automatically applies standard Flink configurations based on these names — things like value.format = 'avro-registry', changelog.mode = 'upsert', and Kafka topic details — so you don’t have to enter them manually.
+As long as you follow the prefix and suffix conventions, the pipeline will build the configuration automatically.”
+
+Section 4 – Best Practices and Quality Checks
+“Before you submit the STTM, review these few items:
+	•	Make sure all primary keys are marked correctly — green rows are your clue.
+	•	Confirm there’s only one filter per view.
+	•	Check that join conditions are clean and use aliases consistently.
+	•	Don’t rename or delete columns — they’re required by the generator.
+	•	Finally, keep the order: Views, XREF, and FGAC — in that exact sequence.”
+
+Closing (Reinforcement & Value)
+“Once this document is complete, the automation takes over. The generator will validate syntax, build all Flink SQL files, and package them for deployment automatically.
+So the accuracy and clarity of your mappings directly determine how cleanly the SQL gets generated.
+If you stick to the structure — no manual SQL, correct stage order, and consistent naming — we’ll get repeatable, traceable, and production-ready data flows with almost zero manual coding.
+That’s the power of this STTM — it’s not just a spreadsheet; it’s the blueprint for the entire ingestion pipeline.”
+
+=============================================================================================================
+
+Build an STTM File in excel format
+
+“When we build an STTM file, we’re basically creating a blueprint for how data moves and transforms — from the raw Kafka topic all the way to the final tables the business will use.
+
+We start by identifying where the data comes from — in this case, the master Kafka topic that carries consumer information.Next, we define what each field means, how it’s formatted, and how we want to use it. Since the Kafka message is in JSON, we first convert it into a Flink view, which is like a clean, readable table version of that message.
+
+Once the data is structured in views, we decide how to build the XREF tables. These tables combine and clean up the data — removing duplicates and keeping one accurate record per consumer. Here, we also define the business keys, such as customer ID or email, that help identify a unique record.
+
+After that, we build the FGAC tables (Fine-Grained Access Control). These are built by joining the XREF table with child or entitlement tables, so that only authorized users can see certain rows or columns — for example, one region might only see its own customers.
+
+In the STTM file, each sheet or section describes:
+	•	What the source data is and how it looks,
+	•	The logic or rules for cleaning and transforming it,
+	•	The target table where it lands,
+	•	And any filters, joins, or special conditions we apply.
+
+So in short — the STTM tells the full story of how raw data becomes trusted, secure, business-ready data. It’s what the developers use to write SQL, and what the business uses to verify the logic and outputs.”
+
+
+Here are the requirements or you.
+
+Source data is ingested into Kafka topic in JSON string format. The kafka topic is a schema level topic which means it contains the JSON messages for multiple tables.
+
+Create an STTM file which servers a blueprint for how the data is transformed from Kafka topis to data lake tables in iceberg format using Flink SQL.
+
+First, consume the events from kafka topic and create view in Flink. These views contains the logic to convert JSON string into table format using built-in json functions in flink. The data type conversion from sting to appropriate data type should also take place in view.
+
+Next, build snapshpot tables called as xref using prinary key upsert logic in flink sql. These tables are created from from the views developed earlier.
+
+Next, the parent table is CBA_CI. The snapshot of this table is joined with address table to generate the refined address table with FGAC columns.
+
+The STTM should also have feature for expressions, join conditions, primary keys, and other required constructs required for this use case and flink sql.
+
+I want you to generate an STTM file for the above mentioned use case.
+
+

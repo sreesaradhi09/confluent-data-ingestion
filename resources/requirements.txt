@@ -1,0 +1,60 @@
+Here’s a brief, business-friendly requirements-style script you can read or paste into a one-pager. It explains how we’ll build the STTM from scratch for the four scenarios you gave.
+STTM Requirements — Master Kafka → Flink Views → XREF → FGAC
+
+1) Purpose & Outcome
+	•	Goal (FR-1): Define a clear Source-to-Target Mapping (STTM) so consumer data from the master Kafka topicis transformed into Flink views, used to build XREF tables, and finally FGAC (fine-grained access control) tables.
+	•	Business Outcome (BR-1): Trusted, deduplicated, and access-controlled consumer records available for analytics and downstream apps.
+
+2) Scope
+	•	In Scope (FR-2):
+	◦	Consume messages from the master Kafka topic.
+	◦	Convert JSON messages into normalized Flink views.
+	◦	Build XREF (snapshot) tables using business keys/rules.
+	◦	Produce FGAC tables by applying row/column-level rules using XREF + child tables.
+	•	Out of Scope (NR-1):
+	◦	Upstream source system changes.
+	◦	Non-consumer domains and non-Kafka sources.
+	◦	UI/visualizations; this is data pipeline & schema only.
+3) Inputs & Outputs
+	•	Inputs (FR-3):
+	◦	Kafka topic: <master_consumer_topic> (JSON payload).
+	◦	Reference/child topics or tables as needed for FGAC.
+	•	Outputs (FR-4):
+	◦	Flink Views (logical tables) for clean JSON fields. 
+	◦	XREF snapshot tables (deduped, business-keyed).
+	◦	FGAC tables (row/column filtered for authorized access).
+4) High-Level Flow (What happens)
+	1	Ingest (FR-5): Read events from the master Kafka topic (append-only stream).
+	2	Normalize (FR-6): Parse JSON and expose fields as Flink views (types, names, null rules).
+	3	XREF Build (FR-7): Use Flink SQL to deduplicate, merge, and snapshot consumer records by business key(s).
+	4	FGAC Build (FR-8): Join XREF with child/entitlement tables to enforce access rules → publish FGAC tables.
+5) Business Rules (Examples)
+	•	BR-2 (Identity): Consumer identity is resolved using {primary_key_set} (e.g., CI_ID, Email, Phone) with deterministic tie-break for duplicates.
+	•	BR-3 (Dedup): Latest valid record (by event time or version) wins; soft-deleted/invalid records excluded.
+	•	BR-4 (Completeness): Required fields (e.g., CI_ID, Status) must be present to enter XREF; else routed to a DQ exception path.
+	•	BR-5 (FGAC): Access is defined by role/region/product (from child/entitlement tables). Users see only permitted rows; sensitive columns may be masked.
+6) Data Quality & Governance
+	•	DQ-1: Field-level type and nullability checks at view layer (JSON → typed).
+	•	DQ-2: Conformance rules (e.g., valid country codes, dates) fail fast to quarantine.
+	•	DQ-3: Dedup metrics (incoming vs. unique keys) recorded daily.
+	•	LIN-1: Lineage documented: Kafka → View → XREF → FGAC with versioned STTM.
+7) Performance & Reliability
+	•	PR-1: Pipeline processes incoming events within agreed SLA (e.g., P95 under N minutes).
+	•	PR-2: XREF snapshot jobs complete within batch window; incremental merges preferred.
+	•	PR-3: Idempotent upserts (replays don’t create duplicates).
+8) Security & Compliance
+	•	SEC-1: PII masked in non-authorized contexts; encryption at rest and in transit.
+	•	SEC-2: FGAC rules centrally defined and versioned; changes auditable.
+	•	SEC-3: Access to FGAC tables enforced via roles/policies; no direct access to raw topics.
+9) Error Handling & Observability
+	•	ERR-1: Malformed JSON → dead-letter with reason code.
+	•	ERR-2: Missing keys for identity resolution → quarantine with daily report.
+	•	OBS-1: Dashboards for throughput, lag, DQ failures, and FGAC rule application counts.
+10) Acceptance Criteria (What “done” means)
+	•	AC-1: Flink views expose all required consumer fields with correct types and names per STTM.
+	•	AC-2: XREF contains one current record per business key; duplicates removed; snapshot reproducible.
+	•	AC-3: FGAC tables hide or mask rows/columns according to role/region/product rules; spot-checks pass.
+	•	AC-4: DQ & error metrics visible; lineage and STTM are versioned and published.
+
+Short Talk Track (optional, 45–60 seconds)
+“We take consumer events from the master Kafka topic and first convert the raw JSON into clean, typed Flink views—this is where we standardize names, data types, and basic quality checks. From those views we build XREF snapshot tables that resolve identity, remove duplicates, and give us one trusted record per consumer. Finally, we apply our fine-grained access rules by joining XREF with child and entitlement tables to produce FGAC tables, so each team only sees the rows and columns they’re allowed to see. Throughout, we track quality, lineage, and errors, and we publish a versioned STTM so everyone knows exactly how data flows from source to the secure, business-ready outputs.”

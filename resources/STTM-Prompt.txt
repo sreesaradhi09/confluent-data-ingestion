@@ -1,0 +1,68 @@
+
+🧩 Prompt: Generate STTM v16 from Scratch
+Act as a data architecture automation expert.
+Build a Source-to-Target Mapping (STTM) Excel file (version 16) that serves as a blueprint for automating Flink SQL generation from Kafka JSON to Iceberg tables.
+🧱 Requirements
+	•	Use a single sheet called STTM_Mapping containing all mappings.
+	•	Add a second sheet called Instructions_for_BA explaining how to fill the mapping in detail.
+📄 Sheet 1: STTM_Mapping
+Each row represents one target column mapping. Include these columns in the following order:
+PipelineStage
+TargetTable
+TargetColumn
+TargetDataType
+IsTargetPK
+TargetPK
+SourcePrimaryTable
+SourcePrimaryAlias
+SourceField
+SourceTransformExpr
+FilterPredicate
+JoinTable1
+JoinAlias1
+JoinType1
+JoinCondition1
+Notes
+🔹 Behavior Rules
+	•	PipelineStage: one of View, XREF, or FGAC.
+	•	TargetPK: populate only for PK rows (one column name per PK cell); leave blank elsewhere.
+	•	IsTargetPK: mark Y for PK columns, N otherwise. Highlight PK rows in light green.
+	•	FilterPredicate: fill only on the PK row of each View.
+	•	JoinCondition1: contain only the logical condition (no “INNER ON” or “LEFT ON”).
+	•	Ordering: always list Views → XREF → FGAC, with PK rows first within each table.
+	•	Validation Dropdowns: add dropdowns for PipelineStage, JoinType1, TargetDataType, and IsTargetPK.
+	•	Column widths: auto-fit for readability; freeze header row and apply filters.
+🔹 Naming Conventions
+	•	Views end with _view
+	•	Snapshot tables begin with XREF_
+	•	FGAC tables end with _REF or _REFINED
+🔹 Example Data
+Populate initial example mappings for the following:
+	•	CBA_CI_view (from Kafka JSON)
+	•	CBA_CI_ADR_view
+	•	XREF_CLH_CL_N
+	•	XREF_CBA_CI
+	•	FGAC_CBA_CI_ADR_REF
+Include sample fields like:
+CI_ID, CI_FRST_NM, CI_LAST_NM, BPD_ID, CLI_ID,
+CI_ADR_QLFR_C, CI_AL_1, CI_ST, CI_Z_C, CI_CNTRY_C,
+EMAIL_MASKED, REGION, SYS_STUS_C
+Show correct usage of filters, joins, and expressions for these tables.
+📘 Sheet 2: Instructions_for_BA
+Create a clear, formatted instruction sheet that includes:
+	•	Purpose of the STTM (how it feeds Flink SQL automation)
+	•	Step-by-step instructions for each column
+	•	Example row showing all fields
+	•	Best practices and validation rules
+	•	Configuration options for Flink tables (value.format, changelog.mode, etc.)
+	•	Table prefix and suffix conventions (XREF_, FGAC_, _view, _REFINED)
+	•	Emphasis on not writing full SQL statements — only expressions
+	•	Review checklist for BAs before handoff
+Use bold headers, bullet points, and wrapped text for readability.
+🎨 Formatting
+	•	Use light blue header background (#D9E1F2)
+	•	Freeze header and first row
+	•	Highlight PK rows (IsTargetPK='Y') in light green (#E2F0D9)
+	•	Enable filters on all columns
+	•	Set column width ≈ 22 characters
+Deliverable: A complete, well-formatted Excel file named STTM_v16_enhanced.xlsx ready for analyst use and generator automation.
