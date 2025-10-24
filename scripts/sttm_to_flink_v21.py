@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
+# sttm_to_flink_v21.py (imports validations from sttm_validations.py)
+
 import argparse
 from pathlib import Path
 from typing import List, Dict
 import pandas as pd
 import re
+
+from sttm_validations import (
+    validate_views_basic,
+    validate_alignment,
+    write_issues_csv,
+)
+
+# ---------- Basic helpers ----------
 
 def norm_cols(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -52,6 +62,56 @@ def qident(name: str) -> str:
         return s
     return f'`{s}`'
 
+# ---------- Predicate handling ----------
+
+_SQL_RESERVED = {
+    "LIKE","AND","OR","NOT","IN","BETWEEN","IS","NULL","EXISTS","ALL","ANY","SOME",
+    "TRUE","FALSE","CASE","WHEN","THEN","ELSE","END","ON","AS","JOIN","LEFT","RIGHT",
+    "FULL","INNER","OUTER","GROUP","BY","ORDER","HAVING","DISTINCT","ASC","DESC",
+    "LIMIT","OFFSET"
+}
+
+_JSON_FIELD_TOKEN = re.compile(r"\b([A-Z][A-Z0-9_]*[A-Z0-9])\b")
+
+def sanitize_predicate(raw: str) -> str:
+    s = (raw or "").strip()
+    s = re.sub(r'^\s*(WHERE|AND|OR)\b', '', s, flags=re.IGNORECASE).strip()
+    s = re.sub(r';+\s*$', '', s)
+    return s
+
+def _rewrite_token(token: str, payload_col: str) -> str:
+    if token in _SQL_RESERVED:  # keep SQL operators intact
+        return token
+    if token.isdigit():
+        return token
+    if "_" not in token and len(token) <= 3:
+        return token
+    return f"JSON_VALUE(CAST({payload_col} AS STRING), '$.{token}')"
+
+def rewrite_predicate_as_json(fp: str, payload_col: str) -> str:
+    if not fp or "JSON_VALUE" in fp.upper():
+        return fp
+    out = []
+    i, n = 0, len(fp)
+    in_s = in_d = False
+    while i < n:
+        ch = fp[i]
+        if ch == "'" and not in_d:
+            out.append(ch); i += 1; in_s = not in_s; continue
+        if ch == '"' and not in_s:
+            out.append(ch); i += 1; in_d = not in_d; continue
+        if in_s or in_d:
+            out.append(ch); i += 1; continue
+        m = _JSON_FIELD_TOKEN.match(fp, i)
+        if m:
+            token = m.group(1)
+            out.append(_rewrite_token(token, payload_col)); i = m.end()
+        else:
+            out.append(ch); i += 1
+    return "".join(out)
+
+# ---------- Expression builder ----------
+
 def choose_expr(row: dict, is_view: bool) -> str:
     override = (row.get('ExprOverride') or '').strip()
     stx = (row.get('SourceTransformExpr') or '').strip()
@@ -77,11 +137,9 @@ def choose_expr(row: dict, is_view: bool) -> str:
         fsel = (row.get('FieldSelector') or '').strip()
 
         if mf == 'JSON':
-            # SourceField holds the JSON key; we emit '$.' + key
             key = sfld or fsel
             base = f"JSON_VALUE(CAST({cfg_payload_default()} AS STRING), '$.{key}')"
         elif mf == 'CSV':
-            # delimiter from Config (csv_delimiter), default ','
             delim = ','
             try:
                 if 'cfg_ref' in globals() and 'key' in cfg_ref.columns and 'value' in cfg_ref.columns:
@@ -90,9 +148,7 @@ def choose_expr(row: dict, is_view: bool) -> str:
                         delim = str(sel['value'].iloc[0] or ',')
             except Exception:
                 delim = ','
-            # ALWAYS use SourceField as payload if provided, else default from Config
             srcp = sfld if sfld else cfg_payload_default()
-            # explicit numeric FieldSelector? use it; else use precomputed CSV_AUTO_INDEX
             if re.match(r'^\d+$', fsel or ''):
                 idx = fsel
             else:
@@ -101,10 +157,10 @@ def choose_expr(row: dict, is_view: bool) -> str:
         else:
             base = sfld or cfg_payload_default()
 
-        norm = f'TRIM({base})' if tgt.upper().startswith('STRING') else f"NULLIF(TRIM({base}), '')"
-        return f'CAST({norm} AS {tgt})'
+        norm = f"TRIM({base})" if tgt.upper().startswith('STRING') else f"NULLIF(TRIM({base}), '')"
+        return f"CAST({norm} AS {tgt})"
 
-    # Non-views: no auto JSON/CSV or casts unless provided
+    # Non-views: no auto JSON/CSV or casts unless explicitly provided
     if override:
         return override
     if stx:
@@ -114,33 +170,31 @@ def choose_expr(row: dict, is_view: bool) -> str:
         return sf
     return (row.get('TargetColumn') or '').strip() or 'NULL'
 
+# ---------- SQL builders ----------
+
 def build_view_sql(table: str, rows: List[dict], cfg: pd.DataFrame) -> str:
     global cfg_ref; cfg_ref = cfg
-    # CSV auto-index allocator (mixed scenarios):
-    # 1) Reserve explicit numeric selectors
-    # 2) Assign auto columns the smallest non-negative unused index in row order
     global CSV_AUTO_INDEX
     CSV_AUTO_INDEX = {}
     reserved = set()
 
-    # pass 1: reserve explicit numeric selectors (only if no override/transform)
+    # Reserve explicit indices
     for _r in rows:
         if (_r.get('MessageFormat') or '').upper() != 'CSV':
             continue
         if (_r.get('ExprOverride') or '').strip() or (_r.get('SourceTransformExpr') or '').strip():
-            continue  # expressions do not consume an index
+            continue
         fsel = (_r.get('FieldSelector') or '').strip()
         if re.match(r'^\d+$', fsel or ''):
             reserved.add(int(fsel))
 
-    # helper to get next free index >= start
     def next_free(start: int) -> int:
         i = start
         while i in reserved:
             i += 1
         return i
 
-    # pass 2: assign auto and advance cursor when explicit is present
+    # Assign auto indices
     cursor = 0
     for _r in rows:
         if (_r.get('MessageFormat') or '').upper() != 'CSV':
@@ -157,13 +211,20 @@ def build_view_sql(table: str, rows: List[dict], cfg: pd.DataFrame) -> str:
             cursor = idx + 1
 
     selects = [f"  {choose_expr(r, True)} AS {r['TargetColumn']}" for r in rows if r.get('TargetColumn')]
-    # Filter predicate only from the first PK row (if present)
+
+    # Filter predicate (first PK row only)
     pk_filter = ""
     for r in rows:
         if (str(r.get("IsTargetPK","")).upper()=="Y") and str(r.get("FilterPredicate","")).strip():
             pk_filter = str(r["FilterPredicate"]).strip()
             break
-    where = f"\nWHERE {pk_filter}" if pk_filter else ""
+
+    where = ""
+    if pk_filter:
+        pred = sanitize_predicate(pk_filter)
+        payload = cfg_get(cfg, "raw_value_column", "val") or "val"
+        json_pred = rewrite_predicate_as_json(pred, payload)
+        where = f"\nWHERE {json_pred}"
 
     src = next(
         (f"{qident(r.get('SourcePrimaryTable',''))} {r.get('SourcePrimaryAlias','') or 't'}"
@@ -172,10 +233,7 @@ def build_view_sql(table: str, rows: List[dict], cfg: pd.DataFrame) -> str:
     )
     if not src:
         fallback = cfg_get(cfg, "raw_table_name", cfg_get(cfg, "default_source_table", "")).strip()
-        if fallback:
-            src = f"{qident(fallback)} t"
-        else:
-            src = "(VALUES(1)) t(dummy)"
+        src = f"{qident(fallback)} t" if fallback else "(VALUES(1)) t(dummy)"
 
     return f"CREATE VIEW {table} AS\nSELECT\n" + ",\n".join(selects) + f"\nFROM {src}{where};"
 
@@ -242,20 +300,6 @@ def classify_target(name: str) -> str:
         return 'FGAC'
     return 'FGAC'
 
-def validate_views(df: pd.DataFrame) -> List[str]:
-    issues = []
-    views = df[df['PipelineStage'].str.upper()=='VIEW']
-    for i, r in views.iterrows():
-        override = str(r.get('ExprOverride','')).strip()
-        mf = str(r.get('MessageFormat','')).upper()
-        key = str(r.get('FieldSelector','')).strip()
-        src = str(r.get('SourceField','')).strip()
-        if not src and mf=='JSON' and not key:
-            issues.append(f'WARN row {i}: JSON View missing key (SourceField or FieldSelector)')
-        if mf=='JSON' and (src or key) and (src or key).startswith('$'):
-            issues.append(f"WARN row {i}: JSON key must not start with '$'")
-    return issues
-
 def generate(sttm_path: Path, out_dir: Path):
     xl = pd.ExcelFile(sttm_path)
     cfg = read_cfg(xl)
@@ -269,7 +313,16 @@ def generate(sttm_path: Path, out_dir: Path):
     df['_s'] = df['PipelineStage'].apply(stage_rank)
     df['_p'] = df.get('IsTargetPK', '').apply(lambda x: 0 if str(x).upper()=='Y' else 1)
     df = df.sort_values(by=['_s','TargetTable','_p','TargetColumn'], na_position='last').drop(columns=['_s','_p'], errors='ignore')
-    issues = validate_views(df)
+
+    # VALIDATIONS
+    basic_warns = validate_views_basic(df)
+    deep_issues = validate_alignment(df, lambda c,k,d='': cfg_get(c,k,d))
+    all_issues = {"warnings": basic_warns + deep_issues.get("warnings", []), "errors": deep_issues.get("errors", [])}
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    write_issues_csv(out_dir, all_issues)
+
+    # Continue to SQL generation regardless; caller can fail on error via CLI flag
     grouped: Dict[str, List[dict]] = {}
     for _, r in df.iterrows():
         row = {c: str(r.get(c, '')).strip() for c in df.columns}
@@ -289,7 +342,6 @@ def generate(sttm_path: Path, out_dir: Path):
                 xref_sql.append(f'-- >>> {t_emitted}\n' + insert_sql(t_emitted, rows, cfg))
             else:
                 fgac_sql.append(f'-- >>> {t_emitted}\n' + insert_sql(t_emitted, rows, cfg))
-    out_dir.mkdir(parents=True, exist_ok=True)
     sections = []
     if views_sql:
         sections.append('-- ===== VIEWS =====\n' + '\n\n'.join(views_sql).strip())
@@ -305,19 +357,31 @@ def generate(sttm_path: Path, out_dir: Path):
         sections.append('-- ===== INSERT STATEMENT SET =====\n' + stmtset)
     all_sql = ('\n\n'.join(sections)).strip() + '\n'
     (out_dir / '00_all.sql').write_text(all_sql, encoding='utf-8')
-    return issues, all_sql
+    return all_issues, all_sql
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--sttm', required=True, help='Path to STTM workbook (xlsx)')
     ap.add_argument('--out-dir', required=True, help='Output directory for consolidated SQL')
+    ap.add_argument('--fail-on-error', action='store_true', help='Exit non-zero if validation errors are found')
     args = ap.parse_args()
     issues, _ = generate(Path(args.sttm), Path(args.out_dir))
-    if issues:
-        print('\n'.join(issues))
-        print('[done] with WARNINGS')
-    else:
-        print('[done] OK')
+    errs = issues.get("errors", [])
+    warns = issues.get("warnings", [])
+    if errs:
+        print("ERRORS:")
+        for e in errs:
+            print(" -", e)
+        print("See issues.csv for full details.")
+        if args.fail_on_error:
+            raise SystemExit(2)
+    if warns:
+        print("WARNINGS:")
+        for w in warns:
+            print(" -", w)
+        print("See issues.csv for full details.")
+    if not errs and not warns:
+        print("[done] OK (no validation issues).")
 
 if __name__ == '__main__':
     main()
