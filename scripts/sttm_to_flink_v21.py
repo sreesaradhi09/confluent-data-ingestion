@@ -260,7 +260,7 @@ def iceberg_table_ddl(table: str, rows: List[dict], cfg: pd.DataFrame) -> str:
     vp = cfg_get(cfg, 'table_value_format', 'avro-registry')
     props = [f"'value.format'='{vp}'"] + [f"'{k}'='{v}'" for k, v in with_items]
     if pk:
-        col_lines.append('  ' + f",PRIMARY KEY ({', '.join(pk)}) NOT ENFORCED")
+        col_lines.append('  ' + f"PRIMARY KEY ({', '.join(pk)}) NOT ENFORCED")
     ddl = 'CREATE TABLE IF NOT EXISTS ' + table + ' (\n' + ',\n'.join(col_lines) + '\n)'
     if props:
         ddl += '\nWITH (\n  ' + ', '.join(props) + '\n)'
