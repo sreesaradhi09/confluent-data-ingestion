@@ -28,7 +28,7 @@ SELECT
   CAST(JSON_VALUE(CAST(val AS STRING), '$.UPDT_SEQ_N') AS INT) AS UPDT_SEQ_N,
   CAST(JSON_VALUE(CAST(val AS STRING), '$.ZIP') AS STRING) AS ZIP
 FROM `ClientRepo-Kafka-Topic` a
-WHERE INFA_TABLE_NAME LIKE '%_CBA_CI_ADR';
+WHERE JSON_VALUE(CAST(val AS STRING), '$.INFA_TABLE_NAME') LIKE '%_CBA_CI_ADR';
 
 -- >>> CBA_CI_CTCOV_view
 CREATE VIEW CBA_CI_CTCOV_view AS
@@ -37,7 +37,7 @@ SELECT
   CAST(TRIM(SPLIT_INDEX(CAST(val AS STRING), ',', 1)) AS STRING) AS CLI_ID,
   CAST(TRIM(SPLIT_INDEX(CAST(val AS STRING), ',', 2)) AS STRING) AS CNTR_ID
 FROM `ClientRepo-Kafka-Topic` cov
-WHERE INFA_TABLE_NAME LIKE '%_CBA_CI_CTCOV';
+WHERE JSON_VALUE(CAST(val AS STRING), '$.INFA_TABLE_NAME') LIKE '%_CBA_CI_CTCOV';
 
 -- >>> CBA_CI_view
 CREATE VIEW CBA_CI_view AS
@@ -57,7 +57,7 @@ SELECT
   CAST(JSON_VALUE(CAST(val AS STRING), '$.NSMIR_CD') AS STRING) AS NSMIR_CD,
   CAST(JSON_VALUE(CAST(val AS STRING), '$.UPDT_SEQ_N') AS INT) AS UPDT_SEQ_N
 FROM `ClientRepo-Kafka-Topic` cba
-WHERE INFA_TABLE_NAME LIKE '%_CBA_CI';
+WHERE JSON_VALUE(CAST(val AS STRING), '$.INFA_TABLE_NAME') LIKE '%_CBA_CI';
 
 -- >>> CLH_CL_N_view
 CREATE VIEW CLH_CL_N_view AS
@@ -67,7 +67,7 @@ SELECT
   CAST(JSON_VALUE(CAST(val AS STRING), '$.BPD_ID') AS INT) AS BPD_ID,
   CAST(JSON_VALUE(CAST(val AS STRING), '$.CL_ENSRC_C') AS STRING) AS CL_ENSRC_C
 FROM `ClientRepo-Kafka-Topic` clh
-WHERE INFA_TABLE_NAME LIKE '%_CLH_0000';
+WHERE JSON_VALUE(CAST(val AS STRING), '$.INFA_TABLE_NAME') LIKE '%_CLH_0000';
 
 -- ===== TABLES (Kafka + Avro) =====
 -- >>> XREF_CBA_CI
@@ -76,10 +76,10 @@ CREATE TABLE IF NOT EXISTS XREF_CBA_CI (
   BPD_ID INT,
   CLI_ID STRING,
   CL_ENSRC_C STRING,
-  ,PRIMARY KEY (CI_ID) NOT ENFORCED
+  PRIMARY KEY (CI_ID) NOT ENFORCED
 )
 WITH (
-  'value.format'='avro-registry', 'changelog.mode'='upsert'
+  'value.format' = 'avro-registry', 'changelog.mode' = 'upsert'
 );
 
 -- >>> XREF_CBA_CI_CTCOV
@@ -88,10 +88,10 @@ CREATE TABLE IF NOT EXISTS XREF_CBA_CI_CTCOV (
   BPD_ID INT,
   CLI_ID STRING,
   CL_ENSRC_C STRING,
-  ,PRIMARY KEY (CI_ID) NOT ENFORCED
+  PRIMARY KEY (CI_ID) NOT ENFORCED
 )
 WITH (
-  'value.format'='avro-registry', 'changelog.mode'='upsert'
+  'value.format' = 'avro-registry', 'changelog.mode' = 'upsert'
 );
 
 -- >>> XREF_CLH_CL_N
@@ -100,10 +100,10 @@ CREATE TABLE IF NOT EXISTS XREF_CLH_CL_N (
   CL_N STRING,
   BPD_ID INT,
   CL_ENSRC_C STRING,
-  ,PRIMARY KEY (CL_ID, CL_N) NOT ENFORCED
+  PRIMARY KEY (CL_ID, CL_N) NOT ENFORCED
 )
 WITH (
-  'value.format'='avro-registry', 'changelog.mode'='upsert'
+  'value.format' = 'avro-registry', 'changelog.mode' = 'upsert'
 );
 
 -- >>> FGAC_CBA_CI_ADR_REF
@@ -132,10 +132,10 @@ CREATE TABLE IF NOT EXISTS FGAC_CBA_CI_ADR_REF (
   SYS_STUS_C STRING,
   UPDT_SEQ_N INT,
   ZIP STRING,
-  ,PRIMARY KEY (ADR_ID, CI_ID) NOT ENFORCED
+  PRIMARY KEY (ADR_ID, CI_ID) NOT ENFORCED
 )
 WITH (
-  'value.format'='avro-registry'
+  'value.format' = 'avro-registry'
 );
 
 -- ===== INSERT STATEMENT SET =====
