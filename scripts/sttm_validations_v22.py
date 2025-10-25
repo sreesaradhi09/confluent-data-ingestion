@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-# sttm_validations_v22.py
-# Matrix-aware validations for STTM v22 (no global config; per-table only via Config_TableMatrix)
+# sttm_validations_v22.py (updated)
+# - Robust Key handling in Config_TableMatrix
+# - Core mapping validations
+# - Matrix validations (presence, XREF upsert, unused columns)
+# - NEW: Warn when multiple non-view FilterPredicates exist and show the combined string
 
 from typing import Dict, List, Tuple
 from pathlib import Path
@@ -138,6 +141,20 @@ def validate_views_and_alignment(mapping_df: pd.DataFrame) -> Dict[str, List[str
                 warns.append(f"[{tname}] JoinTable specified but JoinCondition missing.")
             if jc_vals and not jt_vals:
                 errors.append(f"[{tname}] JoinCondition provided but JoinTable empty.")
+
+            # NEW: warn when multiple non-view FilterPredicates exist and show combined
+            preds = []
+            for r in rows:
+                fp = (r.get('FilterPredicate','') or '').strip()
+                if fp:
+                    s = re.sub(r'^\s*(WHERE|AND|OR)\b', '', fp, flags=re.IGNORECASE).strip()
+                    s = re.sub(r';+\s*$', '', s)
+                    if s:
+                        preds.append(s)
+            if len(preds) > 1:
+                combined = " AND ".join(dict.fromkeys(preds))  # de-dup order-preserving
+                warns.append(f"[{tname}] Multiple FilterPredicate rows found (non-view); combined predicate will be: {combined}")
+
     return {"errors": errors, "warnings": warns}
 
 def validate_against_matrix(mapping_df: pd.DataFrame, matrix_df: pd.DataFrame) -> Dict[str, List[str]]:
@@ -153,7 +170,6 @@ def validate_against_matrix(mapping_df: pd.DataFrame, matrix_df: pd.DataFrame) -
         return {"errors": errors, "warnings": warns}
 
     df = matrix_df.copy()
-    # normalize headers and ensure we have a Key column
     df.columns = [str(c).strip() for c in df.columns if str(c).strip()]
     if not any(str(c).strip().lower() == 'key' for c in df.columns):
         errors.append("Config_TableMatrix must contain a 'Key' column (any case).")

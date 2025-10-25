@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 # sttm_to_flink_v22.py
-# - Uses Config_TableMatrix only (no global config)
+# - Config_TableMatrix only (no global config)
 # - XREF upsert must come from matrix (validator enforces)
 # - Consolidated SQL: Views -> Tables -> EXECUTE STATEMENT SET (XREF + FGAC)
+# - FilterPredicate support:
+#     * VIEW: take the first PK row's FilterPredicate, rewrite bare tokens as JSON_VALUE(...)
+#     * XREF/FGAC: AND all non-empty FilterPredicate rows (after stripping leading WHERE/AND/OR)
+# - Expression rules:
+#     * Views: ExprOverride > SourceTransformExpr > (JSON/CSV auto) + CAST to TargetDataType
+#     * Non-views: no auto-CAST unless provided via ExprOverride/SourceTransformExpr
 
 import argparse
 from pathlib import Path
@@ -23,8 +29,7 @@ def norm_cols(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
     for c in df.columns:
-        # ensure strings; map NaN to ""
-        df[c] = df[c].astype(str).fillna('').map(lambda x: '' if str(x).strip().lower()=='nan' else str(x).strip())
+        df[c] = df[c].astype(str).fillna('').map(lambda x: '' if str(x).strip().lower() == 'nan' else str(x).strip())
     return df
 
 def qident(name: str) -> str:
@@ -35,7 +40,7 @@ def qident(name: str) -> str:
         return s
     return f'`{s}`'
 
-# -------- Predicate handling (JSON views) --------
+# -------- Predicate handling --------
 
 _SQL_RESERVED = {
     "LIKE","AND","OR","NOT","IN","BETWEEN","IS","NULL","EXISTS","ALL","ANY","SOME",
@@ -46,13 +51,17 @@ _SQL_RESERVED = {
 _JSON_FIELD_TOKEN = re.compile(r"\b([A-Z][A-Z0-9_]*[A-Z0-9])\b")
 
 def sanitize_predicate(raw: str) -> str:
+    """
+    Remove a leading WHERE/AND/OR and trailing semicolons.
+    Does NOT rewrite tokens; safe for XREF/FGAC which should use fields as-is.
+    """
     s = (raw or "").strip()
     s = re.sub(r'^\s*(WHERE|AND|OR)\b', '', s, flags=re.IGNORECASE).strip()
     s = re.sub(r';+\s*$', '', s)
     return s
 
 def _rewrite_token(token: str, payload_col: str) -> str:
-    if token in _SQL_RESERVED:  # keep SQL operators intact
+    if token in _SQL_RESERVED:
         return token
     if token.isdigit():
         return token
@@ -61,6 +70,10 @@ def _rewrite_token(token: str, payload_col: str) -> str:
     return f"JSON_VALUE(CAST({payload_col} AS STRING), '$.{token}')"
 
 def rewrite_predicate_as_json(fp: str, payload_col: str) -> str:
+    """
+    For VIEW filters only: rewrite bare field-like tokens to JSON_VALUE(... '$.<field>')
+    Leaves quoted strings intact.
+    """
     if not fp or "JSON_VALUE" in fp.upper():
         return fp
     out = []
@@ -104,7 +117,7 @@ def choose_expr(row: dict, is_view: bool, raw_payload_col: str, csv_delim: str, 
             base = f"JSON_VALUE(CAST({raw_payload_col} AS STRING), '$.{key}')"
         elif mf == 'CSV':
             srcp = sfld if sfld else raw_payload_col
-            if re.match(r'^\\d+$', fsel or ''):
+            if re.match(r'^\d+$', fsel or ''):
                 idx = int(fsel)
             else:
                 idx = int(auto_csv_index.get(row.get('TargetColumn'), 0))
@@ -143,12 +156,11 @@ def resolve_table_props(table_logical: str, table_emitted: str, matrix_df: pd.Da
     df.columns = [str(c).strip() for c in df.columns if str(c).strip()]
     key_col = next((c for c in df.columns if str(c).strip().lower() == "key"), None)
     if not key_col:
-        # No usable Key column -> no properties
         return {}
     if key_col != "Key":
         df = df.rename(columns={key_col: "Key"})
 
-    # Build a mapping of normalized table header -> original header
+    # Build mapping of normalized table header -> original header
     table_headers = {str(c).strip(): c for c in df.columns if c != "Key"}
 
     # Prefer the logical table name, then try the emitted name
@@ -158,7 +170,6 @@ def resolve_table_props(table_logical: str, table_emitted: str, matrix_df: pd.Da
     elif table_emitted in table_headers:
         colname = table_headers[table_emitted]
     else:
-        # Nothing to apply
         return {}
 
     props: Dict[str, str] = {}
@@ -189,24 +200,36 @@ def build_view_sql(table_emitted: str, rows: List[dict], raw_payload_col: str, f
     return f"CREATE VIEW {table_emitted} AS\nSELECT\n" + ",\n".join(selects) + f"\nFROM {src}{where};"
 
 def build_table_ddl(table_emitted: str, rows: List[dict], props: Dict[str, str]) -> str:
-    cols_seen, col_lines, pk_cols = set(), [], []
+    """
+    Emit CREATE TABLE DDL from mapping rows and per-table WITH(...) props.
+    - Columns come from TargetColumn + TargetDataType (deduped by name, first wins)
+    - PRIMARY KEY built from rows where IsTargetPK == 'Y' (NOT ENFORCED)
+    - WITH(...) key/values come from Config_TableMatrix (already resolved -> props)
+    """
+    cols_seen: set = set()
+    col_lines: List[str] = []
+    pk_cols: List[str] = []
+
     for r in rows:
-        c = r['TargetColumn']; t = r['TargetDataType']
-        if c and t and c not in cols_seen:
-            col_lines.append(f'  {c} {t}')
+        c = (r.get('TargetColumn') or '').strip()
+        t = (r.get('TargetDataType') or 'STRING').strip() or 'STRING'
+        if c and c not in cols_seen:
+            col_lines.append(f"  {c} {t}")
             cols_seen.add(c)
-        if (r.get('IsTargetPK','').upper()=='Y') and c not in pk_cols:
+        if c and (r.get('IsTargetPK','').strip().upper() == 'Y') and c not in pk_cols:
             pk_cols.append(c)
+
     if pk_cols:
-        col_lines.append('  ' + f"PRIMARY KEY ({', '.join(pk_cols)}) NOT ENFORCED")
-    ddl = 'CREATE TABLE IF NOT EXISTS ' + table_emitted + ' (\n' + ',\n'.join(col_lines) + '\n)'
+        col_lines.append("  " + f"PRIMARY KEY ({', '.join(pk_cols)}) NOT ENFORCED")
+
+    ddl = f"CREATE TABLE IF NOT EXISTS {table_emitted} (\n" + ",\n".join(col_lines) + "\n)"
     if props:
         kv = ", ".join([f"'{k}' = '{v}'" for k, v in props.items()])
         ddl += f"\nWITH (\n  {kv}\n)"
-    ddl += ';'
+    ddl += ";"
     return ddl
 
-def build_insert_sql(table_emitted: str, rows: List[dict]) -> str:
+def build_insert_sql(table_emitted: str, rows: List[dict], where_predicate: str = '') -> str:
     cols = [r['TargetColumn'] for r in rows if r.get('TargetColumn')]
     selects = [f"  {r['__expr__']} AS {r['TargetColumn']}" for r in rows if r.get('TargetColumn')]
     drv = next((f"{qident(r.get('SourcePrimaryTable',''))} {r.get('SourcePrimaryAlias','') or 't'}" for r in rows if r.get('SourcePrimaryTable','')), '')
@@ -222,7 +245,8 @@ def build_insert_sql(table_emitted: str, rows: List[dict]) -> str:
             ja = (r.get('JoinAlias','') or 'j').strip()
             join = f'\n  {jty} JOIN {jt} {ja} ON {jc}'
             break
-    return 'INSERT INTO ' + table_emitted + ' (' + ', '.join(cols) + ')\nSELECT\n' + ',\n'.join(selects) + f'\nFROM {drv}{join};'
+    where_sql = f"\nWHERE {where_predicate}" if where_predicate else ''
+    return 'INSERT INTO ' + table_emitted + ' (' + ', '.join(cols) + ')\nSELECT\n' + ',\n'.join(selects) + f'\nFROM {drv}{join}{where_sql};'
 
 # -------- Main generator --------
 
@@ -246,12 +270,8 @@ def generate(sttm_path: Path, out_dir: Path):
     mapping['_p'] = mapping.get('IsTargetPK','').apply(lambda x: 0 if str(x).upper()=='Y' else 1)
     mapping = mapping.sort_values(by=['_s','TargetTable','_p','TargetColumn'], na_position='last').drop(columns=['_s','_p'], errors='ignore')
 
-    # config fields used by generator (prefix/suffix + payload + csv delimiter)
-    table_prefix = ''  # not using global config in v22
-    table_suffix = ''
-    view_prefix  = ''
-    view_suffix  = ''
-    raw_payload_col = 'val'  # default source payload column in Kafka schema topic
+    # constants
+    raw_payload_col = 'val'   # default source payload column in Kafka schema topic
     csv_delim = ','
 
     # group by target table
@@ -259,7 +279,7 @@ def generate(sttm_path: Path, out_dir: Path):
     for _, r in mapping.iterrows():
         row = {c: str(r.get(c, '')).strip() for c in mapping.columns}
         t = row.get('TargetTable','')
-        if not t: 
+        if not t:
             continue
         grouped.setdefault(t, []).append(row)
 
@@ -268,18 +288,17 @@ def generate(sttm_path: Path, out_dir: Path):
     for logical, rows in grouped.items():
         stage = (rows[0].get('PipelineStage','FGAC') or 'FGAC').upper()
         is_view = stage == 'VIEW'
-        emitted = logical
+        emitted = logical  # v22: no prefix/suffix
 
         # build expressions and CSV auto index for views
         auto_idx: Dict[str, int] = {}
         if is_view:
-            # reserve explicit indices
             reserved = set()
             for r in rows:
                 if (r.get('MessageFormat','').upper() != 'CSV') or r.get('ExprOverride','').strip() or r.get('SourceTransformExpr','').strip():
                     continue
                 fsel = (r.get('FieldSelector') or '').strip()
-                if re.match(r'^\\d+$', fsel or ''):
+                if re.match(r'^\d+$', fsel or ''):
                     reserved.add(int(fsel))
             def next_free(start: int) -> int:
                 i = start
@@ -291,7 +310,7 @@ def generate(sttm_path: Path, out_dir: Path):
                 if (r.get('MessageFormat','').upper() != 'CSV') or r.get('ExprOverride','').strip() or r.get('SourceTransformExpr','').strip():
                     continue
                 fsel = (r.get('FieldSelector') or '').strip()
-                if re.match(r'^\\d+$', fsel or ''):
+                if re.match(r'^\d+$', fsel or ''):
                     cursor = max(cursor, int(fsel) + 1)
                 else:
                     idx = next_free(cursor)
@@ -303,27 +322,34 @@ def generate(sttm_path: Path, out_dir: Path):
         for r in rows:
             r['__expr__'] = choose_expr(r, is_view, raw_payload_col, csv_delim, auto_idx)
 
-        # Filter predicate (views only): take it from first PK row, rewrite to JSON
-        filt_sql = ""
+        # Filter predicate
         if is_view:
             pk_filter = ""
             for r in rows:
                 if (r.get("IsTargetPK","") or '').upper()=="Y" and (r.get("FilterPredicate","") or '').strip():
                     pk_filter = r["FilterPredicate"].strip(); break
-            if pk_filter:
-                pred = sanitize_predicate(pk_filter)
-                filt_sql = rewrite_predicate_as_json(pred, raw_payload_col)
-
-        if is_view:
+            filt_sql = rewrite_predicate_as_json(sanitize_predicate(pk_filter), raw_payload_col) if pk_filter else ""
             views_sql.append(f'-- >>> {emitted}\n' + build_view_sql(emitted, rows, raw_payload_col, filt_sql))
         else:
-            # DDL props from matrix (mandatory per validation)
+            # Non-views: combine all row FilterPredicate with AND (as-is; only sanitize leading WHERE/AND/OR)
+            preds: List[str] = []
+            seen = set()
+            for r in rows:
+                fp = (r.get('FilterPredicate','') or '').strip()
+                if not fp:
+                    continue
+                clean = sanitize_predicate(fp)
+                if clean and clean not in seen:
+                    preds.append(clean); seen.add(clean)
+            where_nonview = ' AND '.join(preds)
+
+            # DDL props from matrix
             props = resolve_table_props(logical, emitted, matrix_df)
             ddls_sql.append(f'-- >>> {emitted}\n' + build_table_ddl(emitted, rows, props))
             if stage == 'XREF':
-                xref_inserts.append(f'-- >>> {emitted}\n' + build_insert_sql(emitted, rows))
+                xref_inserts.append(f'-- >>> {emitted}\n' + build_insert_sql(emitted, rows, where_nonview))
             else:
-                fgac_inserts.append(f'-- >>> {emitted}\n' + build_insert_sql(emitted, rows))
+                fgac_inserts.append(f'-- >>> {emitted}\n' + build_insert_sql(emitted, rows, where_nonview))
 
     sections = []
     if views_sql:
@@ -339,7 +365,7 @@ def generate(sttm_path: Path, out_dir: Path):
         stmtset = 'EXECUTE STATEMENT SET\nBEGIN\n\n' + ('\n\n'.join(parts)) + '\n\nEND;'
         sections.append('-- ===== INSERT STATEMENT SET =====\n' + stmtset)
     all_sql = ('\n\n'.join(sections)).strip() + '\n'
-    (out_dir / '00_all.sql').write_text(all_sql, encoding='utf-8')
+    (Path(out_dir) / '00_all.sql').write_text(all_sql, encoding='utf-8')
     return issues, all_sql
 
 def main():
@@ -352,7 +378,7 @@ def main():
     errs = issues.get("errors", []); warns = issues.get("warnings", [])
     if errs:
         print("ERRORS:"); [print(" -", e) for e in errs]
-        print("See issues_v22.csv"); 
+        print("See issues_v22.csv")
         if args.fail_on_error: raise SystemExit(2)
     if warns:
         print("WARNINGS:"); [print(" -", w) for w in warns]
