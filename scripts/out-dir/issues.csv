@@ -1,2 +1,0 @@
-level,message
-WARN,[XREF_CBA_CI] JoinTable 'REF_CBA_CI_CTCOV' is not declared as a TargetTable in STTM (assuming external or pre-existing).

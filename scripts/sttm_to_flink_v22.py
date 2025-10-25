@@ -49,6 +49,22 @@ _SQL_RESERVED = {
     "LIMIT","OFFSET"
 }
 _JSON_FIELD_TOKEN = re.compile(r"\b([A-Z][A-Z0-9_]*[A-Z0-9])\b")
+_JSON_SIMPLE_FIELD = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+def _json_path(selector: str, fallback: str = "") -> str:
+    """
+    Build a safe JSON path. If selector already looks like a path (starts with $),
+    keep it. Otherwise, treat it as a field name, using bracket notation when needed.
+    """
+    candidate = (selector or "").strip() or (fallback or "").strip()
+    if not candidate:
+        return "$"
+    if candidate.startswith("$"):
+        return candidate
+    if _JSON_SIMPLE_FIELD.match(candidate):
+        return f"$.{candidate}"
+    esc = candidate.replace('"', '\\"')
+    return f'$["{esc}"]'
 
 def sanitize_predicate(raw: str) -> str:
     """
@@ -114,7 +130,9 @@ def choose_expr(row: dict, is_view: bool, raw_payload_col: str, csv_delim: str, 
 
         if mf == 'JSON':
             key = sfld or fsel
-            base = f"JSON_VALUE(CAST({raw_payload_col} AS STRING), '$.{key}')"
+            json_path = _json_path(key, row.get('TargetColumn', ''))
+            json_path_literal = json_path.replace("'", "''")
+            base = f"JSON_VALUE(CAST({raw_payload_col} AS STRING), '{json_path_literal}')"
         elif mf == 'CSV':
             srcp = sfld if sfld else raw_payload_col
             if re.match(r'^\d+$', fsel or ''):
@@ -153,15 +171,25 @@ def resolve_table_props(table_logical: str, table_emitted: str, matrix_df: pd.Da
 
     # Normalize headers (trim), ensure a 'Key' column exists (case-insensitive)
     df = matrix_df.copy()
-    df.columns = [str(c).strip() for c in df.columns if str(c).strip()]
-    key_col = next((c for c in df.columns if str(c).strip().lower() == "key"), None)
+    clean_cols = []
+    unnamed_cols = set()
+    unnamed_idx = 0
+    for col in df.columns:
+        col_str = str(col).strip()
+        if not col_str:
+            col_str = f"__unnamed_{unnamed_idx}"
+            unnamed_cols.add(col_str)
+            unnamed_idx += 1
+        clean_cols.append(col_str)
+    df.columns = clean_cols
+    key_col = next((c for c in df.columns if c.lower() == "key"), None)
     if not key_col:
         return {}
     if key_col != "Key":
         df = df.rename(columns={key_col: "Key"})
 
     # Build mapping of normalized table header -> original header
-    table_headers = {str(c).strip(): c for c in df.columns if c != "Key"}
+    table_headers = {c: c for c in df.columns if c != "Key" and c not in unnamed_cols}
 
     # Prefer the logical table name, then try the emitted name
     colname = None
@@ -197,7 +225,7 @@ def build_view_sql(table_emitted: str, rows: List[dict], raw_payload_col: str, f
     if not src:
         src = "(VALUES(1)) t(dummy)"
     where = f"\nWHERE {filter_predicate}" if filter_predicate else ""
-    return f"CREATE VIEW {table_emitted} AS\nSELECT\n" + ",\n".join(selects) + f"\nFROM {src}{where};"
+    return f"CREATE VIEW {qident(table_emitted)} AS\nSELECT\n" + ",\n".join(selects) + f"\nFROM {src}{where};"
 
 def build_table_ddl(table_emitted: str, rows: List[dict], props: Dict[str, str]) -> str:
     """
@@ -222,7 +250,7 @@ def build_table_ddl(table_emitted: str, rows: List[dict], props: Dict[str, str])
     if pk_cols:
         col_lines.append("  " + f"PRIMARY KEY ({', '.join(pk_cols)}) NOT ENFORCED")
 
-    ddl = f"CREATE TABLE IF NOT EXISTS {table_emitted} (\n" + ",\n".join(col_lines) + "\n)"
+    ddl = f"CREATE TABLE IF NOT EXISTS {qident(table_emitted)} (\n" + ",\n".join(col_lines) + "\n)"
     if props:
         kv = ", ".join([f"'{k}' = '{v}'" for k, v in props.items()])
         ddl += f"\nWITH (\n  {kv}\n)"
@@ -243,10 +271,10 @@ def build_insert_sql(table_emitted: str, rows: List[dict], where_predicate: str 
             jty = (r.get('JoinType','') or 'LEFT').upper()
             jty = jty if jty in {'INNER','LEFT','RIGHT','FULL'} else 'LEFT'
             ja = (r.get('JoinAlias','') or 'j').strip()
-            join = f'\n  {jty} JOIN {jt} {ja} ON {jc}'
+            join = f'\n  {jty} JOIN {qident(jt)} {ja} ON {jc}'
             break
     where_sql = f"\nWHERE {where_predicate}" if where_predicate else ''
-    return 'INSERT INTO ' + table_emitted + ' (' + ', '.join(cols) + ')\nSELECT\n' + ',\n'.join(selects) + f'\nFROM {drv}{join}{where_sql};'
+    return 'INSERT INTO ' + qident(table_emitted) + ' (' + ', '.join(cols) + ')\nSELECT\n' + ',\n'.join(selects) + f'\nFROM {drv}{join}{where_sql};'
 
 # -------- Main generator --------
 
@@ -267,7 +295,11 @@ def generate(sttm_path: Path, out_dir: Path):
 
     # sort rows for stable output
     mapping['_s'] = mapping['PipelineStage'].apply(lambda x: {'VIEW':0,'XREF':1,'FGAC':2}.get((x or '').upper(), 99))
-    mapping['_p'] = mapping.get('IsTargetPK','').apply(lambda x: 0 if str(x).upper()=='Y' else 1)
+    if 'IsTargetPK' in mapping.columns:
+        pk_source = mapping['IsTargetPK']
+    else:
+        pk_source = pd.Series('', index=mapping.index)
+    mapping['_p'] = pk_source.apply(lambda x: 0 if str(x).upper() == 'Y' else 1)
     mapping = mapping.sort_values(by=['_s','TargetTable','_p','TargetColumn'], na_position='last').drop(columns=['_s','_p'], errors='ignore')
 
     # constants
